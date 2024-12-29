@@ -43,15 +43,19 @@ class EngagementManager:
                 # Get the full conversation thread
                 conversation = await self.collector.app.get_tweet_comments(
                     tweet_id, 
-                    pages=random.randint(3, 5),  # Get 3-5 pages at once
+                    pages=random.randint(3, 5),
                     wait_time=2,
                     get_hidden=False
                 )
 
                 # Store parent tweets first
-                if conversation:
-                    await self._store_engagement_data(tweet_id, conversation, [])
-                    print(f"[{self.collector.collector_id}] Found {len(conversation)} parent tweets")
+                if conversation and conversation.tweets:
+                    # Each ConversationThread has a tweets list
+                    all_tweets = []
+                    for thread in conversation.tweets:
+                        all_tweets.extend(thread.tweets)
+                    await self._store_engagement_data(tweet_id, all_tweets, [])
+                    print(f"[{self.collector.collector_id}] Found {len(all_tweets)} parent tweets")
                 
                 # Get initial replies
                 replies = []

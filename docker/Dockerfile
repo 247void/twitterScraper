@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install specific httpx version that works with tweety
-RUN pip install httpx tweety-ns
+RUN pip install httpx tweety-ns uvicorn
 
 # Copy requirements first for better caching
 COPY pyproject.toml .
@@ -22,5 +22,8 @@ COPY . .
 # Create data directory
 RUN mkdir -p data
 
-# Run python with unbuffered output
-CMD ["python", "-u", "main.py"] 
+# Expose API port
+EXPOSE 8000
+
+# Run both collector and API
+CMD ["sh", "-c", "python -u main.py & uvicorn src.api.main:app --host 0.0.0.0 --port 8000"] 

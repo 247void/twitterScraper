@@ -6,7 +6,9 @@ requires-python = ">=3.9"
 dependencies = [
     "tweety-ns",
     "aiohttp",
-    "python-dotenv"
+    "python-dotenv",
+    "fastapi",
+    "uvicorn"
 ]
 
 [build-system]
