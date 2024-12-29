@@ -105,7 +105,6 @@ class TwitterCollector(BaseCollector):
                 await self.app.sign_in(
                     username=self.config["username"],
                     password=self.config["password"],
-                    extra={**extra, "code": verify_code}
                 )
             
             print(f"[{self.collector_id}] Successfully signed in")
@@ -117,7 +116,6 @@ class TwitterCollector(BaseCollector):
 
         except Exception as e:
             print(f"[{self.collector_id}] Error in connect(): {str(e)}")
-            raise
 
     def load_default_workflow(self) -> Workflow:
         """Load the original behavior as default workflow"""
