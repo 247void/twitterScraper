@@ -9,9 +9,8 @@ services:
       - ./data:/app/data
       - ./.env:/app/.env
       - ./accounts_scraper1.txt:/app/accounts_scraper1.txt
-      - ./session_scraper1.tw_session:/app/session_scraper1.tw_session
     ports:
-      - "8000:8000"
+      - "8001:8000"
     restart: unless-stopped
     environment:
       - PYTHONPATH=/app

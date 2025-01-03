@@ -149,6 +149,13 @@ def init_db():
                   discovered_at TEXT,
                   PRIMARY KEY (tweet_id, hashtag))''')
 
+    c.execute('''CREATE TABLE IF NOT EXISTS search_cache
+                 (search_type TEXT,
+                  term TEXT,
+                  metrics TEXT,
+                  last_searched_at TEXT,
+                  PRIMARY KEY (search_type, term))''')
+
     # Create indexes
     c.execute('CREATE INDEX IF NOT EXISTS idx_tweets_author ON tweets(author_username)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_followings_follower ON account_followings(follower)')

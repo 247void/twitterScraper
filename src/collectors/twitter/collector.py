@@ -21,6 +21,7 @@ from .workflow import Workflow, WorkflowStep
 from .engagement import EngagementManager
 from .mentions import MentionManager
 from .threads import ThreadManager
+from .search import SearchManager
 
 class TwitterCollector(BaseCollector):
     def __init__(self, collector_id, config, workflow: Optional[Workflow] = None):
@@ -41,6 +42,7 @@ class TwitterCollector(BaseCollector):
         self.engagement_manager = EngagementManager(self)
         self.mention_manager = MentionManager(self)
         self.thread_manager = ThreadManager(self)
+        self.search_manager = SearchManager(self)
         
         # Load default workflow if none provided
         self.workflow = workflow or self.load_default_workflow()
@@ -48,6 +50,9 @@ class TwitterCollector(BaseCollector):
         # Override constants with workflow constants
         for key, value in self.workflow.constants.items():
             globals()[key] = value
+
+        self.workflow_paused = False  # Add pause flag
+        self._pause_lock = asyncio.Lock()  # Add lock for thread safety
 
     def _setup_proxy(self, proxy_config):
         """Set up proxy configuration"""
@@ -84,6 +89,9 @@ class TwitterCollector(BaseCollector):
     async def connect(self):
         """Establish connection to Twitter"""
         try:
+            if self.app:  # Already connected
+                return
+            
             proxy_url = self._setup_proxy(self.config.get("proxy"))
             print(f"[{self.collector_id}] Setting up proxy: {proxy_url}")
             
@@ -138,7 +146,7 @@ class TwitterCollector(BaseCollector):
         )
 
     async def collect_data(self):
-        """Dynamic workflow-based collection with smart path selection"""
+        """Dynamic workflow-based collection with pause support"""
         try:
             if not self.app:
                 await self.connect()
@@ -147,15 +155,14 @@ class TwitterCollector(BaseCollector):
             
             while True:
                 try:
+                    # Check if workflow is paused
+                    if self.workflow_paused:
+                        await asyncio.sleep(1)
+                        continue
+
                     step = self.workflow.steps[current_step]
-                    
-                    # Execute step and get next step
                     result, next_step = await self.execute_step(step)
-                    
-                    # Update current step
                     current_step = next_step if next_step else step.next_steps[0]
-                    
-                    # Handle rate limits
                     await self.rate_limiter.handle_rate_limits()
 
                 except Exception as e:
@@ -236,3 +243,25 @@ class TwitterCollector(BaseCollector):
     async def handle_rate_limits(self):
         """Implement abstract method by delegating to RateLimiter"""
         return await self.rate_limiter.handle_rate_limits()
+
+    async def search_term(self, search_type: str, term: str, pages: int = 3) -> dict:
+        """
+        Search term and get metrics
+        """
+        try:
+            return await self.search_manager.search_term(search_type, term, pages)
+        except Exception as e:
+            print(f"[{self.collector_id}] Search error: {str(e)}")
+            raise
+
+    async def pause_workflow(self):
+        """Pause the workflow"""
+        async with self._pause_lock:
+            self.workflow_paused = True
+            print(f"[{self.collector_id}] Workflow paused")
+
+    async def resume_workflow(self):
+        """Resume the workflow"""
+        async with self._pause_lock:
+            self.workflow_paused = False
+            print(f"[{self.collector_id}] Workflow resumed")
