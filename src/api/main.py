@@ -1,88 +1,51 @@
 from fastapi import FastAPI, Query, HTTPException
 from datetime import datetime, timedelta
 import sqlite3
-from typing import List, Optional, Union
-from pydantic import BaseModel, Field
+from typing import List, Optional, Dict
+from pydantic import BaseModel
 from src.database.db import DB_PATH
+from src.collectors.twitter.collector import TwitterCollector
+import config
+from src.utils.logging import setup_logging
+from src.database.db import init_db
+import json
 
 # API Models
-class Tweet(BaseModel):
-    id: str
-    author_username: str
-    text: str
-    created_at: str
-    collected_at: str
-    likes: int = 0
-    retweets: int = 0
-    views: Optional[Union[int, str]] = None
-    bookmark_count: Optional[int] = None
-    reply_counts: Optional[int] = None
-    quote_counts: Optional[int] = None
-    source: Optional[str] = None
-    language: Optional[str] = None
-    conversation_id: Optional[str] = None
-    possibly_sensitive: bool = False
-    is_retweet: bool = False
-    is_quote: bool = False
-    original_tweet_id: Optional[str] = None
-    original_author: Optional[str] = None
-    has_media: bool = False
-    media_type: Optional[str] = None
-    media_url: Optional[str] = None
-    place_id: Optional[str] = None
-    place_full_name: Optional[str] = None
-    coordinates_lat: Optional[float] = None
-    coordinates_long: Optional[float] = None
+class SearchMetrics(BaseModel):
+    search_type: str
+    term: str
+    top_tweets: dict
+    recent_tweets: dict
 
-class UserStats(BaseModel):
-    username: str
-    twitter_id: Optional[str]
-    following_count: Optional[int]
-    followers_count: Optional[int]
-    tweet_count: Optional[int]
-    listed_count: Optional[int]
-    created_at: Optional[str]
-    description: Optional[str]
-    location: Optional[str]
-    url: Optional[str]
-    verified: bool = False
-    profile_image_url: Optional[str]
-    profile_banner_url: Optional[str]
-    last_tweet_check: Optional[str]
-    last_following_check: Optional[str]
-    avg_likes: float = 0
-    max_likes: int = 0
+# Global collectors dict
+collectors: Dict[str, TwitterCollector] = {}
 
 # API Setup
 app = FastAPI(
     title="Twitter Data Collector API",
-    description="""
-    API for querying collected Twitter data from our database. Features include:
-    
-    ## Data Types
-    * Tweets with engagement metrics
-    * User profiles and statistics
-    * Hashtag tracking
-    * Engagement data (replies, quotes, etc.)
-    
-    ## Collection Features
-    * Timeline monitoring
-    * User following relationships
-    * Engagement tracking
-    * Thread analysis
-    
-    ## Notes
-    * All timestamps are in ISO format
-    * Tweet views may show as 'Unavailable' for some tweets
-    * Rate limits apply to protect the database
-    """,
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    description="API for querying collected Twitter data from our database.",
+    version="1.0.0"
 )
 
+@app.on_event("startup")
+async def startup_event():
+    """Initialize collector on startup using existing config"""
+    setup_logging()
+    init_db()
+    
+    # Use first scraper from config
+    scraper_id, scraper_config = next(iter(config.SCRAPERS.items()))
+    
+    collector = TwitterCollector(
+        collector_id=scraper_id,
+        config=scraper_config
+    )
+    
+    await collector.connect()
+    collectors[scraper_id] = collector
+
 @app.get("/tweets", 
-    response_model=List[Tweet],
+    response_model=List[dict],
     summary="Get collected tweets",
     description="""
     Retrieve tweets from the database with optional filtering.
@@ -129,43 +92,64 @@ async def get_tweets(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/users/{username}/stats",
-    response_model=UserStats,
-    summary="Get user statistics",
+@app.get("/search", 
+    response_model=SearchMetrics,
+    summary="Search Twitter for metrics",
     description="""
-    Retrieve aggregated statistics for a specific Twitter user.
+    Search Twitter and get engagement metrics.
     
-    Returns:
-    - Tweet count
-    - Average likes per tweet
-    - Maximum likes on a single tweet
-    - Follower and following counts (if available)
+    - **search_type**: Type of search (ticker, user, etc)
+    - **term**: Search term (e.g. AAPL)
+    - **collector_id**: Optional specific collector to use
     """
 )
-async def get_user_stats(
-    username: str
+async def search_metrics(
+    search_type: str = Query(...),
+    term: str = Query(...),
+    collector_id: Optional[str] = Query(None),
+    force_refresh: bool = Query(False)
 ):
     try:
+        # Check if we searched this term recently
         with sqlite3.connect(DB_PATH) as conn:
-            conn.row_factory = sqlite3.Row
             c = conn.cursor()
-            
             c.execute("""
-                SELECT u.*, 
-                       COUNT(DISTINCT t.id) as tweet_count,
-                       AVG(t.likes) as avg_likes,
-                       MAX(t.likes) as max_likes
-                FROM users u
-                LEFT JOIN tweets t ON u.username = t.author_username
-                WHERE u.username = ?
-                GROUP BY u.username
-            """, (username,))
+                SELECT metrics, last_searched_at 
+                FROM search_cache 
+                WHERE search_type = ? AND term = ?
+                AND last_searched_at > ?
+            """, (
+                search_type, 
+                term,
+                (datetime.now() - timedelta(minutes=30)).isoformat()
+            ))
+            cached = c.fetchone()
             
-            result = c.fetchone()
-            if not result:
-                raise HTTPException(status_code=404, detail="User not found")
-            return dict(result)
-    except sqlite3.Error as e:
+            if cached and not force_refresh:
+                return json.loads(cached[0])
+        
+        # If no recent search or force refresh, get new data
+        collector = collectors.get(collector_id) or next(iter(collectors.values()))
+        results = await collector.search_term(search_type, term)
+        
+        # Update search cache
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            c.execute("""
+                INSERT OR REPLACE INTO search_cache 
+                (search_type, term, metrics, last_searched_at)
+                VALUES (?, ?, ?, ?)
+            """, (
+                search_type,
+                term, 
+                json.dumps(results),
+                datetime.now().isoformat()
+            ))
+            conn.commit()
+            
+        return results
+        
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health",
